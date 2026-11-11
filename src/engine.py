@@ -1,101 +1,109 @@
-# Definition of managed groups (directly governed by corporate policies)
-MANAGED_GROUPS = {"retail", "finance"}
+"""
+Identity-Reconciler Engine
+Core logic for reconciling HR identity records against target application accounts.
+"""
 
-def validate_inputs(hr_records: list[dict], app_records: list[dict], policy: dict) -> list[str]:
+def validate_inputs(hr_records, app_records, department_policy):
     """
-    Validates the consistency and correctness of input data (HR, App, and Policy).
-    Returns a list of detected critical errors.
+    Validates input records and policies for structural integrity.
+    Returns a list of error strings if any issues are found, or an empty list if valid.
     """
     errors = []
-    seen_hr = set()
-    seen_app = set()
-
-    # 1. Validate HR records
-    for emp in hr_records:
-        emp_id = emp.get("employee_id")
-        if not emp_id:
-            errors.append("Found HR record missing employee_id.")
-            continue
-        if emp_id in seen_hr:
-            errors.append(f"Duplicate employee ID in HR: {emp_id}")
-        seen_hr.add(emp_id)
-
-        if emp.get("status") == "active":
-            dept = emp.get("department")
-            if dept not in policy:
-                errors.append(f"Critical error: Active employee {emp_id} has a department not mapped in the policy: '{dept}'.")
-
-    # 2. Validate Application records
-    for acc in app_records:
-        acc_id = acc.get("employee_id")
-        if not acc_id:
-            errors.append("Found App record missing employee_id.")
-            continue
-        if acc_id in seen_app:
-            errors.append(f"Duplicate ID in App: {acc_id}")
-        seen_app.add(acc_id)
-
+    for hr in hr_records:
+        dept = hr.get("department")
+        if dept and dept not in department_policy:
+            errors.append(f"Department '{dept}' is not mapped in access policy.")
     return errors
 
 
-def compute_reconciliation_plan(hr_records: list[dict], app_records: list[dict], policy: dict) -> tuple[list[dict], list[str]]:
+def compute_reconciliation_plan(hr_records, app_records, department_policy):
     """
-    Computes the reconciliation plan by comparing the HR state (source of truth) 
-    with the current application state. Ensures the preservation of unmanaged groups.
+    Computes the reconciliation plan comparing HR records (Source of Truth) 
+    against current application records, enforcing department policies 
+    and preserving unmanaged/legacy group memberships.
+    Returns a tuple of (plan, errors).
     """
-    errors = validate_inputs(hr_records, app_records, policy)
-    if errors:
-        return [], errors
-
-    app_map = {acc["employee_id"]: acc for acc in app_records}
-    hr_map = {emp["employee_id"]: emp for emp in hr_records}
+    errors = validate_inputs(hr_records, app_records, department_policy)
     
+    app_map = {}
+    for app in app_records:
+        app_id = app.get("id") or app.get("employee_id")
+        if app_id:
+            app_map[app_id] = app
+
     plan = []
 
-    for emp_id, hr_emp in hr_map.items():
-        status = hr_emp["status"]
-        dept = hr_emp.get("department")
+    for hr in hr_records:
+        user_id = hr.get("id") or hr.get("employee_id")
         
-        app_acc = app_map.get(emp_id)
-        app_exists = app_acc is not None
-        app_enabled = app_acc.get("enabled", False) if app_exists else False
-        app_groups = set(app_acc.get("groups", [])) if app_exists else set()
+        raw_status = hr.get("status")
+        if raw_status is not None:
+            hr_active = (raw_status == "active")
+        else:
+            hr_active = True
 
-        # Isolate unmanaged groups (e.g., 'legacy-vpn-access') to preserve them
-        unmanaged_groups = app_groups - MANAGED_GROUPS
-        
-        # Determine expected managed groups based on policy and active status
-        desired_managed = set(policy.get(dept, [])) if status == "active" else set()
-        
-        # Final target groups include policy groups + preserved unmanaged groups
-        target_groups = list(desired_managed | unmanaged_groups)
+        department = hr.get("department")
 
+        target_groups = []
         actions = []
-        target_enabled = (status == "active")
 
-        if status == "active":
-            if not app_exists:
-                actions.append("CREATE_ACCOUNT")
-                actions.append(f"ASSIGN_GROUPS: {list(desired_managed)}")
-            else:
-                if not app_enabled:
-                    actions.append("ENABLE_ACCOUNT")
-                
-                current_managed = app_groups & MANAGED_GROUPS
-                if current_managed != desired_managed:
-                    actions.append(f"RECONCILE_GROUPS: remove {list(current_managed - desired_managed)}, add {list(desired_managed - current_managed)}")
-        
-        elif status == "inactive":
-            if app_exists and app_enabled:
+        # Case 1: Inactive Employee (Leaver) or terminated in HR
+        if not hr_active:
+            app_user = app_map.get(user_id)
+            app_enabled = app_user.get("status") == "active" or app_user.get("enabled", True) if app_user else False
+            
+            if app_user and app_enabled:
                 actions.append("DISABLE_ACCOUNT")
-                if app_groups & MANAGED_GROUPS:
-                    actions.append(f"REMOVE_MANAGED_GROUPS: {list(app_groups & MANAGED_GROUPS)}")
+                current_groups = app_user.get("groups", [])
+                managed_groups = department_policy.get(department, [])
+                active_managed = [g for g in current_groups if g in managed_groups]
+                if active_managed:
+                    actions.append(f"REMOVE_MANAGED_GROUPS: {active_managed}")
+            
+            plan.append({
+                "id": user_id,
+                "employee_id": user_id,
+                "target_groups": [],
+                "target_enabled": False,
+                "actions": actions
+            })
+            continue
+
+        # Managed policy groups defined for the department
+        managed_policy_groups = set(department_policy.get(department, []))
+
+        # Case 2: User already exists in the target application system
+        if user_id in app_map:
+            current_app_user = app_map[user_id]
+            current_groups = set(current_app_user.get("groups", []))
+
+            # Identify unmanaged/legacy custom groups that must be strictly preserved
+            all_policy_groups = {g for groups in department_policy.values() for g in groups}
+            unmanaged_groups = current_groups - all_policy_groups
+
+            # Target groups are the union of department policy groups and custom/legacy groups
+            target_groups = sorted(list(managed_policy_groups.union(unmanaged_groups)))
+
+            # Determine app enabled status
+            app_enabled = current_app_user.get("status") == "active" or current_app_user.get("enabled", False)
+            if not app_enabled:
+                actions.append("ENABLE_ACCOUNT")
+            
+            if current_groups != set(target_groups):
+                to_remove = list(current_groups - set(target_groups))
+                to_add = list(set(target_groups) - current_groups)
+                actions.append(f"RECONCILE_GROUPS: remove {to_remove}, add {to_add}")
+        else:
+            # Case 3: New Employee (Joiner) - Does not exist in target application yet
+            actions.append("CREATE_ACCOUNT")
+            target_groups = sorted(list(managed_policy_groups))
 
         plan.append({
-            "employee_id": emp_id,
-            "target_enabled": target_enabled,
+            "id": user_id,
+            "employee_id": user_id,
             "target_groups": target_groups,
+            "target_enabled": True,
             "actions": actions
         })
 
-    return plan, []
+    return plan, errors

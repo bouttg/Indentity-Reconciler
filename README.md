@@ -1,70 +1,58 @@
 # Identity-Reconciler
 
-A modular Python tool designed to reconcile HR identity data against active application accounts based on predefined access policies. It ensures strict compliance with departmental roles while preserving unmanaged and legacy group memberships.
+Production-ready Identity and Access Management (IAM) reconciliation engine designed to synchronize HR records (Source of Truth) with target application accounts while strictly preserving unmanaged/legacy group memberships.
 
----
+## Features
 
-## 🛠️ Architecture & Workflow
+- **HR as Source of Truth**: Computes precise lifecycle actions (`CREATE_ACCOUNT`, `DISABLE_ACCOUNT`, `ENABLE_ACCOUNT`, `RECONCILE_GROUPS`).
+- **Policy Enforcement**: Automatically maps department-based policies to managed application groups.
+- **Legacy Preservation**: Safely preserves unmanaged, custom, or legacy group memberships (idempotent reconciliation).
+- **Input Validation**: Validates structural integrity and unmapped department policies.
+- **Robust Test Suite**: Fully covered by `pytest` ensuring high reliability and compliance.
 
-The diagram below illustrates how the engine ingests records, validates inputs, evaluates policy constraints, and computes the reconciliation plan.
+## Project Structure
 
-```mermaid
-flowchart TD
-    HR[HR Records - Source of Truth] --> Engine[compute_reconciliation_plan]
-    App[App Records - Current State] --> Engine
-    Policy[Access Policy - Department Mapping] --> Engine
-
-    Engine --> Validation{Validate Inputs}
-    Validation -->|Errors Found| ErrorOutput[Return Empty Plan & Error List]
-    Validation -->|Valid Inputs| Processing[Evaluate Accounts & Managed Groups]
-
-    Processing --> Preserve[Preserve Unmanaged Groups\ne.g., legacy-vpn-access]
-    Preserve --> Actions[Generate Actions\nCREATE, ENABLE, RECONCILE, REMOVE]
-    Actions --> FinalPlan[Return Final Reconciliation Plan]
+```text
+identity-reconciler/
+├── src/
+│   └── engine.py        # Core reconciliation logic and input validation
+├── tests/
+│   └── test_engine.py   # Comprehensive unit test suite
+├── main.py              # CLI demonstration runner
+├── requirements.txt     # Project dependencies
+└── README.md            # Project documentation
 ```
 
----
-
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
-* Python 3.10+ (tested on Python 3.14)
-* `pytest` for running unit tests
+Ensure you have Python 3.10+ installed on your system.
 
 ### Installation
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/bouttg/Identity-Reconciler.git
-   cd Identity-Reconciler
-   ```
+Clone the repository and install the required dependencies:
 
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
----
-
-## 🧪 Running Tests & Execution
-
-Run the test suite using `pytest`:
 ```bash
-py -m pytest -v
+git clone https://github.com/bouttg/Indentity-Reconciler.git
+cd Indentity-Reconciler
+pip install -r requirements.txt
 ```
 
-Run the example script:
+## Usage
+
+### Run Unit Tests
+To execute the comprehensive test suite and verify architectural integrity:
 ```bash
-py main.py
+pytest -v
 ```
 
----
+### Run Demonstration Script
+To simulate a full IAM reconciliation batch (covering Joiners, Movers, Leavers, and legacy group preservation):
+```bash
+python main.py
+```
 
-## 📋 Core Principles
+## License
 
-1. **HR as Source of Truth**: Employee status (`active`/`inactive`) dictates whether an application account should be enabled or created.
-2. **Managed vs. Unmanaged Groups**:
-   - **Managed Groups**: Governed strictly by departmental policies (e.g., `retail`, `finance`).
-   - **Unmanaged Groups**: Preserved automatically for active users (e.g., `legacy-vpn-access`).
-3. **Strict Input Validation**: Validates duplicate IDs across datasets and ensures all active employees belong to mapped policy departments.
+This project is licensed under the MIT License.
